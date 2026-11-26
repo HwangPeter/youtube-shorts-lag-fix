@@ -4,7 +4,9 @@
 //
 // It reads only the page URL, the focused element, fullscreen and visibility
 // state, ytd-watch-flexy's video-id attribute and the <video>'s current time.
-// The only thing it changes is the page address, when it reloads. It also
+// The only thing it changes is the page address, when it reloads; just
+// before that it tells playback.js to save the playback speed and quality
+// for the new page (see playback-core.js). It also
 // answers the popup's messages: a ping (so the popup knows this tab is
 // YouTube) and "Start fresh session now", which reloads at once.
 (() => {
@@ -47,6 +49,15 @@
     return v && Number.isFinite(v.currentTime) ? v.currentTime : 0;
   };
 
+  // First asks the page script (playback.js) to save the player's speed and
+  // quality, which it sets again on the new page. dispatchEvent runs its
+  // listener before returning, so the save is done before the page goes.
+  const reload = (url) => {
+    const playback = globalThis.YtPlaybackCore;
+    if (playback) document.dispatchEvent(new CustomEvent(playback.SAVE_EVENT));
+    location.replace(url);
+  };
+
   let pending = 0;
   const refresher = core.createRefresher({
     getSettings: store.get,
@@ -57,7 +68,7 @@
         clearTimeout(pending);
         pending = 0;
         console.info('[shorts-fix] reloading YouTube in a fresh page, as asked from the popup:', url);
-        location.replace(url);
+        reload(url);
         return;
       }
       if (pending) return;
@@ -68,7 +79,7 @@
         if (!id) { pending = 0; return; } // left the video page: skip; the count has started again
         const url = core.buildRefreshUrl(location.href, currentTimeFor(id));
         console.info('[shorts-fix] reloading YouTube in a fresh page to free memory:', url);
-        location.replace(url);
+        reload(url);
       }, SETTLE_MS);
     },
   });

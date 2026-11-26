@@ -27,7 +27,7 @@ if (!src.includes(PRIMARY_LINE)) throw new Error('PRIMARY switch not found in sr
 fs.rmSync(dist, { recursive: true, force: true });
 
 // Files of the refresh feature, copied as they are into the full add-on.
-const REFRESH_FILES = ['refresh-core.js', 'refresh.js', 'popup.html', 'popup.js'];
+const REFRESH_FILES = ['refresh-core.js', 'refresh.js', 'playback-core.js', 'playback.js', 'popup.html', 'popup.js'];
 
 function writeExtension(dir, code, nameSuffix = '', world = 'MAIN') {
   fs.mkdirSync(dir, { recursive: true });

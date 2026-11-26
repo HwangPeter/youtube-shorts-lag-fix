@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YouTube Shorts & Lag Fix",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Fixes YouTube Shorts showing the wrong video, and stops long YouTube sessions lagging by reloading the page every N videos to free memory.",
   "permissions": ["storage"],
   "content_scripts": [
@@ -13,7 +13,12 @@
     },
     {
       "matches": ["https://www.youtube.com/*", "https://m.youtube.com/*"],
-      "js": ["refresh-core.js", "refresh.js"]
+      "js": ["refresh-core.js", "playback-core.js", "refresh.js"]
+    },
+    {
+      "matches": ["https://www.youtube.com/*", "https://m.youtube.com/*"],
+      "js": ["playback-core.js", "playback.js"],
+      "world": "MAIN"
     }
   ],
   "action": {
