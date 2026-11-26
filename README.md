@@ -100,20 +100,21 @@ A long YouTube session gets slower and slower. YouTube is a single-page app, and
 So the add-on counts the distinct videos the tab opens, both `/watch?v=` videos and `/shorts/` Shorts. Each video counts once, however often you return to it. After 40 videos it loads the next video you open in a fresh page:
 - **It lands between videos.** It waits for the navigation to the next new video after the count is reached, waits 1 s for that video to load, then loads the same URL again with `location.replace`. Back and Forward history stay as they were.
 - **It keeps your place.** On `/watch` pages it adds `&t=<seconds>s` when the video is at least 1 s in, and keeps the other URL parameters, such as a playlist. It ignores the time while an ad is playing.
+- **It keeps your speed and quality.** A fresh page would start at normal speed, and not always at the quality you picked. So just before the reload it saves the player's playback speed and the quality you chose in the player's menu. Once the new page's player has the same video loaded, with no ad showing, it sets both again, once. This works on `/watch` pages and on Shorts. A quality left on Auto stays on Auto. The saved values live in that tab's `sessionStorage` and are deleted as soon as the new page reads them, so a reload you do yourself is not affected. The add-on changes these settings at no other time.
 - **It waits when the time is not right.** That means while you are typing in a box (search, comments) or the tab is hidden, and while the page is in fullscreen, up to 1.5 × the setting. Each time, it tries again at the next new video.
 - After the reload the count starts again.
 
 **Setting.** Click the add-on's toolbar button, or open its options in `about:addons`. A slider sets the number of videos, from 10 to 100 in steps of 5, with the current number shown next to it. Below it the popup says "After N videos, the next video opens in a fresh session." A checkbox turns the reload off. Changes apply at once to open YouTube tabs.
 
-**Start fresh session now.** A button in the popup reloads the YouTube tab you are on at once, without waiting for the count. It reloads the same way as the automatic reload, keeping your place with `t=` on `/watch` pages, and the count starts again. It works with the automatic reload turned off too. When the active tab is not a YouTube tab, as in `about:addons`, the button is greyed out with a short note.
+**Start fresh session now.** A button in the popup reloads the YouTube tab you are on at once, without waiting for the count. It reloads the same way as the automatic reload, keeping your place with `t=` on `/watch` pages and your speed and quality, and the count starts again. It works with the automatic reload turned off too. When the active tab is not a YouTube tab, as in `about:addons`, the button is greyed out with a short note.
 
-The logic is in `src/refresh-core.js`. The content script is `src/refresh.js`, which runs in the add-on's isolated world, separate from the Shorts fix. The settings page is `src/popup.html` and `src/popup.js`. The userscript does not include the lag fix.
+The logic is in `src/refresh-core.js`. The content script is `src/refresh.js`, which runs in the add-on's isolated world, separate from the Shorts fix. The settings page is `src/popup.html` and `src/popup.js`. Keeping speed and quality is `src/playback-core.js` (the logic) and `src/playback.js`, which runs in the page's own world because only that world can use YouTube's player; `src/refresh.js` tells it to save the settings, with a `yt-shorts-fix-save-playback` event on the page, just before it reloads. The userscript does not include the lag fix.
 
 ### Privacy and permissions
 
 - No network requests, analytics or data collection.
 - The only messages are inside the add-on: when the popup opens it asks the active tab whether the add-on's YouTube script runs there, and the "Start fresh session now" button tells that script to reload.
-- The add-on's only permission is `storage`, used to keep the lag fix setting on your computer (`storage.local`). Its only site access is `https://www.youtube.com/*` and `https://m.youtube.com/*`, where its scripts run.
+- The add-on's only permission is `storage`, used to keep the lag fix setting on your computer (`storage.local`). Across its own reload it also keeps the playback speed and quality in the YouTube tab's `sessionStorage` for a moment (see above). Its only site access is `https://www.youtube.com/*` and `https://m.youtube.com/*`, where its scripts run.
 - The manifest declares `data_collection_permissions: none` for Firefox.
 
 ## Build
@@ -123,7 +124,7 @@ You need Node 18 or newer.
 ```sh
 npm install
 npm run build
-npm test        # unit tests for the lag fix logic
+npm test        # unit tests for the lag fix logic, its popup, and keeping speed and quality
 ```
 
 This writes:
@@ -197,13 +198,14 @@ Google Chrome itself has not been tested. It uses the same engine and the same m
 
 ### Lag fix test (Firefox)
 
-`npm run test:refresh` runs `test/refresh-e2e.mjs`. It uses the same kind of throwaway, muted Firefox profile as the test below, on port 9558. It takes about 3 minutes.
+`npm run test:refresh` runs `test/refresh-e2e.mjs`. It uses the same kind of throwaway, muted Firefox profile as the test below, on port 9558. It takes a little over 3 minutes.
 - It checks that the settings page shows 40, then opens a Short, watches 3 and sets the slider to 10 while the YouTube tab is open.
 - Then the page must not reload up to the 10th Short, and must reload on the 11th, on that Short.
 - With the setting off, 12 more Shorts must not cause a reload.
 - With it back on, it follows 10 related `/watch` videos and seeks the 11th to 60 s at once. The page must reload on that video with `t=60s`, and the player must be at 60 s.
 - It then checks the "Start fresh session now" button. While the settings page's own tab is active, the button must be greyed out with a note. With the YouTube tab active, a click must reload that tab at once, on the same video with `t=`.
-- `npm run test:refresh:button` runs only the button checks (`--only button`), in about 30 s.
+- Before that click it sets the player to 1.5× and 480p. After the reload both must be set again. It then does the same on a Short at 2× with quality on Auto: 2× must come back and quality must stay on Auto.
+- `npm run test:refresh:button` runs only the button checks (`--only button`), in about a minute.
 - Firefox starts with `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1` so the test can use the settings page, which a test-only background script opens in a tab.
 
 ### Automated test (Firefox)

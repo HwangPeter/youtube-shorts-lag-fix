@@ -1,6 +1,6 @@
 {
   "name": "yt-shorts-fix",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "license": "MIT",
   "description": "Fixes YouTube Shorts showing the wrong video, and stops long YouTube sessions lagging by reloading the page every N videos to free memory.",
