@@ -54,6 +54,13 @@ test('capture leaves quality out when it is on Auto', () => {
   assert.deepEqual(plain(core.capture(fakePlayer({ rate: 2 }), 5)), { at: 5, video: 'abc', rate: 2 });
 });
 
+test('capture saves for the video the reload goes to, when given', () => {
+  // The user moved on to xyz while the player still has abc loaded.
+  assert.deepEqual(plain(core.capture(fakePlayer({ rate: 1.5 }), 7, 'xyz')), { at: 7, video: 'xyz', rate: 1.5 });
+  assert.deepEqual(plain(core.capture(fakePlayer({ rate: 1.5 }), 7, '')), { at: 7, video: 'abc', rate: 1.5 });
+  assert.equal(core.capture(null, 7, 'xyz'), null);
+});
+
 test('capture: nothing without a player, a video, or usable values', () => {
   assert.equal(core.capture(null, 1), null);
   assert.equal(core.capture({}, 1), null);
@@ -107,6 +114,7 @@ test('apply keeps a chosen quality the video does not have, as YouTube does', ()
 // one shared document, as the browser does.
 const makeTab = () => {
   const store = new Map();
+  const clock = { now: 0 }; // Date.now() in both worlds: tests move it on
   const sessionStorage = {
     getItem: (k) => (store.has(k) ? store.get(k) : null),
     setItem: (k, v) => store.set(k, String(v)),
@@ -129,10 +137,10 @@ const makeTab = () => {
         return null;
       },
     };
-    class CustomEvent { constructor(type) { this.type = type; } }
+    class CustomEvent { constructor(type, init) { this.type = type; this.detail = init?.detail; } }
     const world = (extra = {}) => {
       const ctx = {
-        URL, JSON, Promise, Date, CustomEvent, console: { info: () => {}, log: () => {} },
+        URL, JSON, Promise, Date: { now: () => clock.now }, CustomEvent, console: { info: () => {}, log: () => {} },
         location, document, sessionStorage, window: { addEventListener: () => {} },
         setInterval: (fn) => { intervals.push(fn); return intervals.length; },
         clearInterval: (id) => { intervals[id - 1] = null; },
@@ -160,7 +168,7 @@ const makeTab = () => {
     const runTimeouts = () => { for (const fn of timeouts.splice(0)) fn(); };
     return { location, tick, refreshNow, navigate, runTimeouts };
   };
-  return { load, store };
+  return { load, store, clock };
 };
 
 test('reload keeps speed and quality: saved just before the reload, set once on the new page, then cleared', async () => {
@@ -214,6 +222,7 @@ test('the automatic reload after N videos keeps them too', async () => {
   for (let i = 1; i <= 40; i++) page1.navigate(W(`v${i}`)); // the 41st distinct video: the default threshold is 40
   players['#movie_player'].video = 'v40';
   assert.deepEqual(page1.location.replaced, [], 'waits 1 s for the video to settle');
+  tab.clock.now += 1000;
   page1.runTimeouts();
   assert.equal(page1.location.replaced.length, 1);
   assert.deepEqual({ ...JSON.parse(page1.location.replaced[0].saved), at: 0 }, { at: 0, video: 'v40', rate: 1.25, quality: 'hd1080' });

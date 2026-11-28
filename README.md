@@ -98,7 +98,8 @@ All the logic is in `src/shorts-fix.js`, which runs inside the YouTube page.
 A long YouTube session gets slower and slower. YouTube is a single-page app, and the tab's memory grows by roughly 80 MB for every video you open. That rate was measured in Firefox over 24 hours, and in one long session the tab reached 8.4 GB. Only a real page load gives that memory back.
 
 So the add-on counts the distinct videos the tab opens, both `/watch?v=` videos and `/shorts/` Shorts. Each video counts once, however often you return to it. After 40 videos it loads the next video you open in a fresh page:
-- **It lands between videos.** It waits for the navigation to the next new video after the count is reached, waits 1 s for that video to load, then loads the same URL again with `location.replace`. Back and Forward history stay as they were.
+- **It lands between videos.** It waits for the navigation to the next new video after the count is reached. Once that video's address has stayed for 1 s, with no YouTube navigation under way, it loads that URL again with `location.replace`. If you click or scroll on to another video in that second, it waits for that one instead. Back and Forward history stay as they were.
+- **It goes where you went.** The old page keeps working until the fresh one arrives, so you can still click or scroll there just as the reload starts. A press on a link, a scroll, swipe or Up/Down key on a Shorts page, or Shift+N / Shift+P stops the reload (`window.stop()`). YouTube then opens the video you chose, and the reload follows once that video has loaded. If the address changes anyway before the old page goes, the reload goes to the new address. Either way the fresh page plays the video you clicked or scrolled to, and `t=` only ever comes from that video. Before 0.1.5 the pending reload loaded the video you had just left.
 - **It keeps your place.** On `/watch` pages it adds `&t=<seconds>s` when the video is at least 1 s in, and keeps the other URL parameters, such as a playlist. It ignores the time while an ad is playing.
 - **It keeps your speed and quality.** A fresh page would start at normal speed, and not always at the quality you picked. So just before the reload it saves the player's playback speed and the quality you chose in the player's menu. Once the new page's player has the same video loaded, with no ad showing, it sets both again, once. This works on `/watch` pages and on Shorts. A quality left on Auto stays on Auto. The saved values live in that tab's `sessionStorage` and are deleted as soon as the new page reads them, so a reload you do yourself is not affected. The add-on changes these settings at no other time.
 - **It waits when the time is not right.** That means while you are typing in a box (search, comments) or the tab is hidden, and while the page is in fullscreen, up to 1.5 × the setting. Each time, it tries again at the next new video.
@@ -124,7 +125,7 @@ You need Node 18 or newer.
 ```sh
 npm install
 npm run build
-npm test        # unit tests for the lag fix logic, its popup, and keeping speed and quality
+npm test        # unit tests for the lag fix logic, its popup, its reload, and keeping speed and quality
 ```
 
 This writes:
@@ -206,6 +207,8 @@ Google Chrome itself has not been tested. It uses the same engine and the same m
 - It then checks the "Start fresh session now" button. While the settings page's own tab is active, the button must be greyed out with a note. With the YouTube tab active, a click must reload that tab at once, on the same video with `t=`.
 - Before that click it sets the player to 1.5× and 480p. After the reload both must be set again. It then does the same on a Short at 2× with quality on Auto: 2× must come back and quality must stay on Auto.
 - `npm run test:refresh:button` runs only the button checks (`--only button`), in about a minute.
+- Last, it sets the slider to 10 again and follows related `/watch` videos. As soon as the add-on logs that it is reloading, the test clicks another related video with a real mouse click, while the old page is still there. The fresh page must load the clicked video, with its player on it and no `t=` from the video before. With 0.1.4 it loaded the video before. `npm run test:refresh:click` runs only this check (`--only click`), in about a minute.
+- The test copy of the add-on also mutes every tab and every video, so no sound plays.
 - Firefox starts with `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1` so the test can use the settings page, which a test-only background script opens in a tab.
 
 ### Automated test (Firefox)
@@ -298,6 +301,7 @@ extension/manifest.json    Manifest V3 (Firefox 140+, Chromium 111+)
 scripts/build.mjs          builds dist/extension, dist/shorts-fix.user.js and two test-only builds
 test/refresh-core.test.mjs lag fix unit tests (npm test)
 test/popup.test.mjs        popup wording and "Start fresh session now" tests (npm test)
+test/refresh-reload.test.mjs the reload lands on the video you clicked or scrolled to last (npm test)
 test/refresh-e2e.mjs       lag fix test in a real Firefox (npm run test:refresh)
 test/repro.mjs             visible-browser Firefox reproduction test
 test/proof.mjs             runs every test mode and checks each gives the expected result

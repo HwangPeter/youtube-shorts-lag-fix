@@ -21,8 +21,8 @@
 
   const player = () => document.querySelector(core.playerSelector(location.href));
 
-  document.addEventListener(core.SAVE_EVENT, () => {
-    const saved = core.capture(player(), Date.now());
+  document.addEventListener(core.SAVE_EVENT, (e) => {
+    const saved = core.capture(player(), Date.now(), e.detail);
     try {
       if (saved) sessionStorage.setItem(core.STORAGE_KEY, JSON.stringify(saved));
       else sessionStorage.removeItem(core.STORAGE_KEY);

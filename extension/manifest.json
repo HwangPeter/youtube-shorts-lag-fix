@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YouTube Shorts & Lag Fix",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Fixes YouTube Shorts showing the wrong video, and stops long YouTube sessions lagging by reloading the page every N videos to free memory.",
   "permissions": ["storage"],
   "content_scripts": [

@@ -32,7 +32,15 @@
 //    player's own menu makes): after the reload both must be set again, and
 //    the saved entry gone from sessionStorage. Then the same on a Short at 2x
 //    with quality left on Auto: 2x comes back and quality stays on Auto.
+// 5. A click just as the reload starts: with the setting at 10, follow
+//    related videos until the add-on logs that it is reloading, then at once
+//    click (a real mouse click) another related video, while the old page is
+//    still there. The fresh page must load the clicked video and its player,
+//    with no t= from the video before. (0.1.4 loaded the video before.)
 // --only button runs the popup checks and section 4 alone (about a minute).
+// --only click runs the popup checks and section 5 alone (about a minute).
+// The test copy of the add-on also mutes every tab and every video, on top of
+// media.volume_scale=0.0, so no sound plays.
 // Playback after a reload is checked only when a page the test loads itself
 // starts playing: in a window without the OS focus YouTube does not start
 // playback on fresh page loads at all, with or without the add-on.
@@ -48,7 +56,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
 const opt = (name, def) => { const i = args.indexOf(`--${name}`); return i >= 0 ? args[i + 1] : def; };
 const OUT = opt('out', null);
-const ONLY = opt('only', null); // 'button': only the popup checks and section 4
+const ONLY = opt('only', null); // 'button': only the popup checks and section 4; 'click': section 5
 const PORT = Number(process.env.FF_BIDI_PORT || 9558);
 const CHANNEL = process.env.SHORTS_CHANNEL || 'https://www.youtube.com/@MrBeast/shorts';
 const LOW = 10;
@@ -178,8 +186,22 @@ try {
   say('firefox', await browser.version());
   const ext = path.join(runDir, 'extension');
   fs.cpSync(src, ext, { recursive: true });
-  fs.writeFileSync(path.join(ext, 'test-open-popup.js'), "browser.tabs.create({ url: 'popup.html' });\n");
-  fs.writeFileSync(path.join(ext, 'manifest.json'), JSON.stringify({ ...manifest, background: { scripts: ['test-open-popup.js'] } }, null, 2));
+  fs.writeFileSync(path.join(ext, 'test-open-popup.js'), [
+    "browser.tabs.create({ url: 'popup.html' });",
+    '// test-only: mute every tab',
+    'const muteTab = (t) => { if (t && !t.mutedInfo?.muted) browser.tabs.update(t.id, { muted: true }).catch(() => {}); };',
+    'browser.tabs.query({}).then((ts) => ts.forEach(muteTab));',
+    'browser.tabs.onCreated.addListener(muteTab);',
+    'browser.tabs.onUpdated.addListener((id, change, t) => muteTab(t));',
+  ].join('\n') + '\n');
+  // test-only: keep every video and audio element muted
+  fs.writeFileSync(path.join(ext, 'test-mute-media.js'),
+    "setInterval(() => document.querySelectorAll('video,audio').forEach((v) => { if (!v.muted) v.muted = true; }), 200);\n");
+  fs.writeFileSync(path.join(ext, 'manifest.json'), JSON.stringify({
+    ...manifest,
+    background: { scripts: ['test-open-popup.js'] },
+    content_scripts: [...manifest.content_scripts, { matches: manifest.content_scripts[0].matches, js: ['test-mute-media.js'], run_at: 'document_start', world: 'MAIN' }],
+  }, null, 2));
   const yt = (await browser.pages())[0];
   say('installed temporary add-on', await browser.installExtension(toFf(ext)), manifest.version);
   // BiDi lists the popup tab as about:blank, so ask each tab where it is.
@@ -210,7 +232,7 @@ try {
     'button disabled with a note while a non-YouTube tab is active', JSON.stringify(btn0));
 
   let s;
-  if (ONLY !== 'button') {
+  if (!ONLY) {
     // ---- 1. Shorts, threshold changed live from 40 to 10 ----------------------
     await yt.bringToFront();
     await yt.goto(CHANNEL, { waitUntil: 'load', timeout: 90000 });
@@ -355,99 +377,173 @@ try {
     if (OUT) await yt.screenshot({ path: path.join(OUT, 'watch-after-reload.png') }).catch(() => {});
   }
 
-  // ---- 4. Start fresh session now ------------------------------------------
-  // Big Buck Bunny: up to 2160p, so 480p is one of its qualities.
-  await yt.bringToFront();
-  await yt.goto('https://www.youtube.com/watch?v=aqz-KE-bpKQ', { waitUntil: 'load', timeout: 90000 });
-  s = await settle(yt, 5000);
-  await mark(yt, 'session4');
-  const seekTo = await yt.evaluate(() => {
-    if (document.querySelector('#movie_player.ad-showing')) return null;
-    try { document.querySelector('#movie_player').seekTo(10, true); } catch (e) { document.querySelector('#movie_player video').currentTime = 10; }
-    return 10;
-  }).catch(() => null);
-  await sleep(1000);
-  // Speed and quality as the player's menu sets them.
-  await yt.evaluate(() => { const mp = document.querySelector('#movie_player'); mp.setPlaybackRate(1.5); mp.setPlaybackQualityRange('large', 'large'); });
-  await sleep(1000);
-  const pb4 = await yt.evaluate(PLAYBACK);
-  say('playback before the reload', JSON.stringify(pb4));
-  const before4 = await yt.evaluate(STATE);
-  // Reload the popup page, check its button, click it, and return the YouTube
-  // tab's state once its fresh page has loaded (or null).
-  // keepOpen: stop the popup page closing itself after the click, so the test
-  // can click it again.
-  const clickFreshSession = async (before, { keepOpen = false } = {}) => {
-    await popup.evaluate(() => location.reload()).catch(() => {}); // BiDi's own reload waits for a load event a background tab may not report
-    await sleep(1500);
-    const btn = await popup.evaluate(() => ({
-      disabled: document.getElementById('refresh-now').disabled,
-      noteHidden: document.getElementById('refresh-note').hidden,
-    }));
-    expect(!btn.disabled && btn.noteHidden, 'button enabled while the YouTube tab is active', JSON.stringify(btn));
-    if (keepOpen) await popup.evaluate(() => { window.close = () => {}; });
-    const clickedAt = Date.now();
-    await popup.evaluate(() => document.getElementById('refresh-now').click()).catch(() => {}); // the popup closes itself
-    for (let i = 0; i < 20; i++) {
-      await sleep(250);
-      const st = await yt.evaluate(STATE).catch(() => null);
-      if (st && st.timeOrigin !== before.timeOrigin) return { ...st, ms: Date.now() - clickedAt };
+  if (!ONLY || ONLY === 'button') {
+    // ---- 4. Start fresh session now ------------------------------------------
+    // Big Buck Bunny: up to 2160p, so 480p is one of its qualities.
+    await yt.bringToFront();
+    await yt.goto('https://www.youtube.com/watch?v=aqz-KE-bpKQ', { waitUntil: 'load', timeout: 90000 });
+    s = await settle(yt, 5000);
+    await mark(yt, 'session4');
+    const seekTo = await yt.evaluate(() => {
+      if (document.querySelector('#movie_player.ad-showing')) return null;
+      try { document.querySelector('#movie_player').seekTo(10, true); } catch (e) { document.querySelector('#movie_player video').currentTime = 10; }
+      return 10;
+    }).catch(() => null);
+    await sleep(1000);
+    // Speed and quality as the player's menu sets them.
+    await yt.evaluate(() => { const mp = document.querySelector('#movie_player'); mp.setPlaybackRate(1.5); mp.setPlaybackQualityRange('large', 'large'); });
+    await sleep(1000);
+    const pb4 = await yt.evaluate(PLAYBACK);
+    say('playback before the reload', JSON.stringify(pb4));
+    const before4 = await yt.evaluate(STATE);
+    // Reload the popup page, check its button, click it, and return the YouTube
+    // tab's state once its fresh page has loaded (or null).
+    // keepOpen: stop the popup page closing itself after the click, so the test
+    // can click it again.
+    const clickFreshSession = async (before, { keepOpen = false } = {}) => {
+      await popup.evaluate(() => location.reload()).catch(() => {}); // BiDi's own reload waits for a load event a background tab may not report
+      await sleep(1500);
+      const btn = await popup.evaluate(() => ({
+        disabled: document.getElementById('refresh-now').disabled,
+        noteHidden: document.getElementById('refresh-note').hidden,
+      }));
+      expect(!btn.disabled && btn.noteHidden, 'button enabled while the YouTube tab is active', JSON.stringify(btn));
+      if (keepOpen) await popup.evaluate(() => { window.close = () => {}; });
+      const clickedAt = Date.now();
+      await popup.evaluate(() => document.getElementById('refresh-now').click()).catch(() => {}); // the popup closes itself
+      for (let i = 0; i < 20; i++) {
+        await sleep(250);
+        const st = await yt.evaluate(STATE).catch(() => null);
+        if (st && st.timeOrigin !== before.timeOrigin) return { ...st, ms: Date.now() - clickedAt };
+      }
+      return null;
+    };
+    // The new page's playback, once the add-on has set it again (or after 30 s,
+    // plus the length of any ad).
+    const playbackAfter = async (done) => {
+      let pb = null;
+      for (let i = 0; i < 120; i++) {
+        await sleep(500);
+        pb = await yt.evaluate(PLAYBACK).catch(() => null);
+        if (pb && pb.entry === null && done(pb)) break;
+        if (pb?.ad) i = Math.min(i, 60);
+      }
+      await sleep(2000); // and it stays so
+      return yt.evaluate(PLAYBACK).catch(() => pb);
+    };
+    const fresh = await clickFreshSession(before4, { keepOpen: true });
+    expect(!!fresh && fresh.marker === null && fresh.urlId === before4.urlId,
+      'button: fresh page load at once, on the same video', JSON.stringify(fresh));
+    if (fresh && seekTo !== null && before4.time >= 10) {
+      const tSec = parseInt(fresh.t || '0', 10);
+      expect(tSec >= 10 && tSec <= before4.time + 3, 'button: time kept with t=', `t=${fresh.t} before=${before4.time}`);
+    } else if (fresh) say(`NOTE button timestamp not checked (seek=${seekTo} time=${before4.time} ad=${before4.ad})`);
+    if (fresh) {
+      if (pb4.rate === 1.5 && pb4.preferred === 'large') {
+        const pb = await playbackAfter((x) => x.rate === 1.5 && x.preferred === 'large');
+        expect(pb.rate === 1.5 && pb.videoRate === 1.5 && pb.preferred === 'large' && pb.quality === 'large' && pb.entry === null,
+          'button: speed 1.5x and quality 480p kept over the reload', JSON.stringify(pb));
+      } else say(`NOTE /watch speed and quality not checked: could not set them before the reload (${JSON.stringify(pb4)})`);
     }
-    return null;
-  };
-  // The new page's playback, once the add-on has set it again (or after 30 s,
-  // plus the length of any ad).
-  const playbackAfter = async (done) => {
-    let pb = null;
-    for (let i = 0; i < 120; i++) {
-      await sleep(500);
-      pb = await yt.evaluate(PLAYBACK).catch(() => null);
-      if (pb && pb.entry === null && done(pb)) break;
-      if (pb?.ad) i = Math.min(i, 60);
-    }
-    await sleep(2000); // and it stays so
-    return yt.evaluate(PLAYBACK).catch(() => pb);
-  };
-  const fresh = await clickFreshSession(before4, { keepOpen: true });
-  expect(!!fresh && fresh.marker === null && fresh.urlId === before4.urlId,
-    'button: fresh page load at once, on the same video', JSON.stringify(fresh));
-  if (fresh && seekTo !== null && before4.time >= 10) {
-    const tSec = parseInt(fresh.t || '0', 10);
-    expect(tSec >= 10 && tSec <= before4.time + 3, 'button: time kept with t=', `t=${fresh.t} before=${before4.time}`);
-  } else if (fresh) say(`NOTE button timestamp not checked (seek=${seekTo} time=${before4.time} ad=${before4.ad})`);
-  if (fresh) {
-    if (pb4.rate === 1.5 && pb4.preferred === 'large') {
-      const pb = await playbackAfter((x) => x.rate === 1.5 && x.preferred === 'large');
-      expect(pb.rate === 1.5 && pb.videoRate === 1.5 && pb.preferred === 'large' && pb.quality === 'large' && pb.entry === null,
-        'button: speed 1.5x and quality 480p kept over the reload', JSON.stringify(pb));
-    } else say(`NOTE /watch speed and quality not checked: could not set them before the reload (${JSON.stringify(pb4)})`);
-  }
-  if (OUT) await yt.screenshot({ path: path.join(OUT, 'after-fresh-session-button.png') }).catch(() => {});
+    if (OUT) await yt.screenshot({ path: path.join(OUT, 'after-fresh-session-button.png') }).catch(() => {});
 
-  // ---- 4b. The same on a Short: 2x kept, quality left on Auto ---------------
-  await yt.goto(CHANNEL, { waitUntil: 'load', timeout: 90000 });
-  await sleep(4000);
-  const short4 = await yt.evaluate(() => [...document.querySelectorAll('a[href*="/shorts/"]')]
-    .map((a) => a.getAttribute('href')).find((h) => /^\/shorts\/[^/?&]+/.test(h)));
-  if (!short4) throw new Error('no Short found on the channel grid');
-  await yt.goto(`https://www.youtube.com${short4}`, { waitUntil: 'load', timeout: 90000 });
-  await settle(yt, 4000);
-  await yt.evaluate(() => {
-    const mp = document.querySelector('#shorts-player');
-    mp.setPlaybackRate(2);
-    mp.setPlaybackQualityRange('auto', 'auto');
-  });
-  await sleep(1000);
-  const pbS = await yt.evaluate(PLAYBACK);
-  say('Short playback before the reload', JSON.stringify(pbS));
-  const freshS = await clickFreshSession(await yt.evaluate(STATE));
-  expect(!!freshS && freshS.marker === null && `/shorts/${freshS.urlId}` === short4.split(/[?#]/)[0],
-    'button on a Short: fresh page load on the same Short', JSON.stringify(freshS));
-  if (freshS && pbS.rate === 2 && pbS.preferred === 'auto') {
-    const pb = await playbackAfter((x) => x.rate === 2);
-    expect(pb.rate === 2 && pb.videoRate === 2 && pb.preferred === 'auto' && pb.entry === null,
-      'button on a Short: speed 2x kept, quality left on Auto', JSON.stringify(pb));
-  } else if (freshS) say(`NOTE Short speed not checked: could not set it before the reload (${JSON.stringify(pbS)})`);
+    // ---- 4b. The same on a Short: 2x kept, quality left on Auto ---------------
+    await yt.goto(CHANNEL, { waitUntil: 'load', timeout: 90000 });
+    await sleep(4000);
+    const short4 = await yt.evaluate(() => [...document.querySelectorAll('a[href*="/shorts/"]')]
+      .map((a) => a.getAttribute('href')).find((h) => /^\/shorts\/[^/?&]+/.test(h)));
+    if (!short4) throw new Error('no Short found on the channel grid');
+    await yt.goto(`https://www.youtube.com${short4}`, { waitUntil: 'load', timeout: 90000 });
+    await settle(yt, 4000);
+    await yt.evaluate(() => {
+      const mp = document.querySelector('#shorts-player');
+      mp.setPlaybackRate(2);
+      mp.setPlaybackQualityRange('auto', 'auto');
+    });
+    await sleep(1000);
+    const pbS = await yt.evaluate(PLAYBACK);
+    say('Short playback before the reload', JSON.stringify(pbS));
+    const freshS = await clickFreshSession(await yt.evaluate(STATE), { keepOpen: !ONLY }); // section 5 still needs the popup
+    expect(!!freshS && freshS.marker === null && `/shorts/${freshS.urlId}` === short4.split(/[?#]/)[0],
+      'button on a Short: fresh page load on the same Short', JSON.stringify(freshS));
+    if (freshS && pbS.rate === 2 && pbS.preferred === 'auto') {
+      const pb = await playbackAfter((x) => x.rate === 2);
+      expect(pb.rate === 2 && pb.videoRate === 2 && pb.preferred === 'auto' && pb.entry === null,
+        'button on a Short: speed 2x kept, quality left on Auto', JSON.stringify(pb));
+    } else if (freshS) say(`NOTE Short speed not checked: could not set it before the reload (${JSON.stringify(pbS)})`);
+
+  }
+
+  // ---- 5. A click just as the reload starts --------------------------------
+  if (!ONLY || ONLY === 'click') {
+    const r5 = await setPopup(popup, { enabled: true, threshold: LOW });
+    expect(r5.stored.refreshThreshold === LOW && r5.stored.refreshEnabled === true, `popup at ${LOW} for the click check`);
+    await yt.bringToFront();
+    let reloadLogged = 0;
+    const onConsole = (m) => { if (m.text().includes('reloading YouTube in a fresh page to free memory')) reloadLogged = Date.now(); };
+    yt.on('console', onConsole);
+    await yt.goto('https://www.youtube.com/watch?v=aqz-KE-bpKQ', { waitUntil: 'load', timeout: 90000 });
+    s = await settle(yt, 5000);
+    await mark(yt, 'session5');
+    const origin5 = s.timeOrigin;
+    const seen5 = new Set([s.urlId]);
+    // Marks a related video the user has not opened yet, in view, and
+    // returns its id.
+    const pickRelated = () => yt.evaluate((seenIds) => {
+      document.querySelectorAll('[data-e2e-pick]').forEach((a) => a.removeAttribute('data-e2e-pick'));
+      for (const a of document.querySelectorAll('#secondary a[href^="/watch?v="]')) {
+        const u = new URL(a.href);
+        const id = u.searchParams.get('v');
+        if (id && !seenIds.includes(id) && !u.searchParams.has('list') && a.offsetParent && a.getBoundingClientRect().height > 20) {
+          a.setAttribute('data-e2e-pick', '1');
+          return id;
+        }
+      }
+      return null;
+    }, [...seen5]).catch(() => null);
+    // A real mouse click on that video (retried while the sidebar re-renders).
+    const clickRelated = async () => {
+      for (let i = 0; i < 10; i++) {
+        const id = await pickRelated();
+        const h = id && await yt.$('a[data-e2e-pick="1"]').catch(() => null);
+        if (h && await h.click().then(() => true, () => false)) return id;
+        await sleep(50);
+      }
+      return null;
+    };
+    let clicked = null;
+    let clickMs = null;
+    let fresh5 = null;
+    for (let k = 0; k < LOW + 4 && !clicked; k++) {
+      const id = await clickRelated();
+      if (!id) { say('  no related link to click'); break; }
+      seen5.add(id);
+      // Wait for the add-on to start its reload (or for this video to settle).
+      for (let i = 0; i < 400 && !reloadLogged; i++) await sleep(10);
+      if (reloadLogged) {
+        clicked = await clickRelated(); // at once, while the old page is still there
+        clickMs = Date.now() - reloadLogged;
+        say(`  reload started on video ${seen5.size} (${id}); clicked ${clicked} ${clickMs} ms later`);
+        break;
+      }
+      await sleep(500);
+    }
+    if (clicked) {
+      for (let i = 0; i < 60 && !fresh5; i++) {
+        await sleep(250);
+        const st = await yt.evaluate(STATE).catch(() => null);
+        if (st && st.timeOrigin !== origin5 && st.urlId === st.playerId && st.playerId) fresh5 = st;
+      }
+      await sleep(2000);
+      if (fresh5) fresh5 = await yt.evaluate(STATE);
+      const tSec = parseInt(fresh5?.t || '0', 10);
+      expect(!!fresh5 && fresh5.marker === null && fresh5.urlId === clicked && fresh5.playerId === clicked && tSec <= 5,
+        'click as the reload starts: the fresh page plays the clicked video, with no t= from the one before',
+        `clicked=${clicked} (${clickMs} ms after the reload started) ${JSON.stringify(fresh5)}`);
+    } else expect(false, 'click as the reload starts: the reload started, and a related video was clicked', `seen=${seen5.size}`);
+    yt.off('console', onConsole);
+    if (OUT) await yt.screenshot({ path: path.join(OUT, 'after-click-during-reload.png') }).catch(() => {});
+  }
 
   say(`RESULT refresh e2e: ${checks - failures}/${checks} checks passed`);
   exitCode = failures ? 1 : 0;
