@@ -1,6 +1,6 @@
 {
   "name": "yt-shorts-fix",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "license": "MIT",
   "description": "Fixes YouTube Shorts showing the wrong video, and stops long YouTube sessions lagging by reloading the page every N videos to free memory.",
@@ -10,6 +10,7 @@
     "test": "node --test test/*.test.mjs",
     "test:refresh": "node scripts/build.mjs && node test/refresh-e2e.mjs",
     "test:refresh:button": "node scripts/build.mjs && node test/refresh-e2e.mjs --only button",
+    "test:refresh:click": "node scripts/build.mjs && node test/refresh-e2e.mjs --only click",
     "test:repro": "node scripts/build.mjs && node test/repro.mjs",
     "test:proof": "node scripts/build.mjs && node test/proof.mjs",
     "package": "node scripts/build.mjs && npx --yes web-ext@8 build --source-dir dist/extension --artifacts-dir dist --overwrite-dest"

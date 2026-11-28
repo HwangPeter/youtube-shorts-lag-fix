@@ -16,6 +16,7 @@ var YtPlaybackCore = (() => {
   'use strict';
   // Fired on document by refresh.js just before it reloads: the page script
   // saves the playback settings when it hears it.
+  // Its detail is the id of the video the reload goes to.
   const SAVE_EVENT = 'yt-shorts-fix-save-playback';
   // sessionStorage key: per tab, and kept over a same-tab reload.
   const STORAGE_KEY = 'ytShortsFixPlayback';
@@ -49,10 +50,12 @@ var YtPlaybackCore = (() => {
 
   // What to keep: { at, video, rate, quality }, with quality only when the
   // user chose one (not Auto), or null when there is nothing to keep. video
-  // is the player's video, so the settings go back on that video only.
-  const capture = (player, now) => {
-    const video = videoOf(player);
-    if (!video) return null;
+  // is the video the reload goes to (the player's own video when not given),
+  // so the settings go back on that video only: the reload may go to a video
+  // the player has not loaded yet, when the user moved on just before it.
+  const capture = (player, now, target) => {
+    const video = typeof target === 'string' && target ? target : videoOf(player);
+    if (!video || !videoOf(player)) return null;
     const out = { at: now, video };
     const rate = call(player, 'getPlaybackRate');
     if (validRate(rate)) out.rate = rate;
